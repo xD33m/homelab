@@ -1,0 +1,7 @@
+---
+# Traefik access log - drives the http-* scenarios (scanners, CVE probes,
+# wordpress scans, sensitive-file access). Rotated by traefik/entrypoint.sh.
+filenames:
+  - /var/log/traefik/access.log
+labels:
+  type: traefik

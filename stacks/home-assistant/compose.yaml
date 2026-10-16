@@ -1,0 +1,49 @@
+# Home Assistant (Container install). The design notes and rollout plan live
+# in the private config repo and are not published here.
+#
+# Host networking is required for discovery (mDNS/SSDP/DHCP), Bluetooth and
+# Matter, so there are no Traefik labels here: Traefik cannot route to a
+# host-network container by label without extra_hosts on traefik itself.
+# The route lives in stacks/traefik/conf.d/home-assistant.yml instead (tailnet only).
+#
+# One-time setup in the UI after onboarding at http://192.168.1.x:8123:
+#   Settings > System > Network > HTTP server:
+#     Trust X-Forwarded-For on, trusted proxies 172.18.0.0/16 (traefik's side
+#     of the `web` bridge), IP banning on. Without this every request through
+#     Traefik is answered with 400.
+#   Settings > System > Network: adapter eth0 only.
+
+services:
+  homeassistant:
+    container_name: homeassistant
+    # Pinned: HA ships breaking changes monthly. Bump deliberately after
+    # reading "Backward-incompatible changes" in the release notes.
+    image: ghcr.io/home-assistant/home-assistant:2026.9.4
+    restart: unless-stopped
+    stop_grace_period: 60s        # lets the recorder close SQLite cleanly
+    network_mode: host
+    # The official example uses privileged: true. Not needed here: no USB radio
+    # is passed to HA (zigbee2mqtt will own the dongle in phase 2), and
+    # Bluetooth needs only these two capabilities plus the D-Bus socket.
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./config:/config
+      - /etc/localtime:/etc/localtime:ro
+      - /run/dbus:/run/dbus:ro
+    environment:
+      - TZ=Europe/Berlin
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1536M           # estimate - tighten after watching docker stats
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8123/manifest.json"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s

@@ -1,0 +1,26 @@
+services:
+  code-server:
+    image: lscr.io/linuxserver/code-server:latest
+    container_name: code-server
+    environment:
+      - PUID=0
+      - PGID=0
+      - TZ=Europe/Berlin
+      - DEFAULT_WORKSPACE=${DEV_DIR}
+    networks:
+      - web
+    labels:
+      traefik.enable: true
+      traefik.http.routers.code-server.entryPoints: https
+      traefik.http.routers.code-server.rule: Host(`code.lucask.dev`)
+      traefik.http.services.code-server.loadbalancer.server.port: 8443
+      traefik.http.routers.code-server.middlewares: secured-relaxed-auth@file
+    volumes:
+      - ./config:/config
+      # The host's dev workspace, mounted at the same path inside the container.
+      - ${DEV_DIR}:${DEV_DIR}
+    restart: unless-stopped
+
+networks:
+  web:
+    external: true

@@ -1,0 +1,19 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  # Image tags in every stack's compose.yaml
+  - package-ecosystem: docker-compose
+    directories:
+      - /stacks/*
+    schedule:
+      interval: weekly
+
+  # Base image of the one locally built service
+  - package-ecosystem: docker
+    directory: /stacks/embedding-service
+    schedule:
+      interval: weekly

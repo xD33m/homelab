@@ -1,0 +1,18 @@
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflare-tunnel
+    restart: unless-stopped
+    command: "tunnel --no-autoupdate run"
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    volumes:
+      - ./cloudflared:/etc/cloudflared
+    networks:
+      - web
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+networks:
+  web:
+    external: true

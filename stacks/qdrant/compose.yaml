@@ -1,0 +1,37 @@
+networks:
+  web:
+    external: true
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.13.2
+    container_name: qdrant
+    restart: unless-stopped
+    networks:
+      - web
+    volumes:
+      - ./storage:/qdrant/storage
+    environment:
+      - QDRANT__STORAGE__ON_DISK_PAYLOAD=true
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo -e \"GET /healthz HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n\" > /dev/tcp/localhost/6333'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.qdrant-secure.entrypoints=https"
+      - "traefik.http.routers.qdrant-secure.rule=Host(`qdrant.lucask.dev`)"
+      - "traefik.http.routers.qdrant-secure.service=qdrant-secure"
+      - "traefik.http.routers.qdrant-secure.middlewares=secured-auth@file"
+      - "traefik.http.services.qdrant-secure.loadbalancer.server.port=6333"

@@ -1,0 +1,26 @@
+---
+# CrowdSec AppSec (WAF) datasource.
+#
+# Traefik's crowdsec-bouncer plugin POSTs each request here for inline
+# inspection BEFORE it reaches the backend. Without this datasource the
+# appsec-* collections and vpatch-* rules are installed but never evaluated.
+#
+# Only reachable over the `web` docker network - no host port is published.
+#
+# Rule set: crowdsecurity/appsec-default
+#   inband (blocking): base-config + vpatch-* (CVE virtual patching) + generic-*
+#   out-of-band (alert only): experimental-* + appsec-generic-test
+#
+# The crowdsecurity/crs (full OWASP Core Rule Set) config is installed but
+# deliberately NOT loaded here: it is ~200 extra rules per request, which is a
+# lot for a Pi 4, and Cloudflare's managed WAF already covers generic OWASP
+# patterns upstream. To add it (alert-only), switch to:
+#   appsec_configs:
+#     - crowdsecurity/appsec-default
+#     - crowdsecurity/crs
+listen_addr: 0.0.0.0:7422
+appsec_config: crowdsecurity/appsec-default
+name: traefik-appsec
+source: appsec
+labels:
+  type: appsec

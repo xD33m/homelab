@@ -1,0 +1,38 @@
+services:
+  memos:
+    image: neosmemo/memos:stable
+    container_name: memos
+    environment:
+      - MEMOS_MODE=prod
+      - MEMOS_PORT=5230
+      - TZ=Europe/Berlin
+      # Security configurations
+      - MEMOS_FORCE_HTTPS=true
+      - MEMOS_SESSION_COOKIE_SECURE=true
+      - MEMOS_SESSION_COOKIE_HTTP_ONLY=true
+      - MEMOS_SESSION_COOKIE_SAME_SITE=strict
+      - MEMOS_SESSION_TIMEOUT=3600
+      - MEMOS_SESSION_ABSOLUTE_TIMEOUT=28800
+      # Rate limiting
+      - MEMOS_RATE_LIMIT_ENABLED=true
+      - MEMOS_RATE_LIMIT_REQUESTS_PER_MINUTE=100
+      - MEMOS_API_RATE_LIMIT_RPM=60
+      - MEMOS_LOGIN_RATE_LIMIT_RPM=10
+      # Security monitoring
+      - MEMOS_AUDIT_LOG_ENABLED=true
+      - MEMOS_AUDIT_LOG_LEVEL=info
+    networks:
+      - web
+    labels:
+      traefik.enable: true
+      traefik.http.routers.memos.entryPoints: https
+      traefik.http.routers.memos.rule: Host(`notes.lucask.dev`)
+      traefik.http.services.memos.loadbalancer.server.port: 5230
+      traefik.http.routers.memos.middlewares: secured-auth@file
+    volumes:
+      - ./memos:/var/opt/memos
+    restart: unless-stopped
+
+networks:
+  web:
+    external: true

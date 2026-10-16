@@ -1,0 +1,35 @@
+networks:
+  web:
+    external: true
+
+services:
+  embedding-service:
+    build: .
+    container_name: embedding-service
+    restart: unless-stopped
+    networks:
+      - web
+    environment:
+      - FASTEMBED_CACHE_DIR=/app/models
+    volumes:
+      - model-cache:/app/models
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    labels:
+      - "traefik.enable=false"
+
+volumes:
+  model-cache:

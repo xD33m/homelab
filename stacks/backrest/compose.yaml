@@ -1,0 +1,32 @@
+services:
+  backrest:
+    image: garethgeorge/backrest:latest
+    container_name: backrest
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/Berlin
+      - BACKREST_CONFIG=/config/config.json
+      - BACKREST_DATA=/data
+      - XDG_CACHE_HOME=/cache
+      - TMPDIR=/tmp
+    volumes:
+      - ./config:/config
+      - ./data:/data
+      - ./cache:/cache
+      - ./tmp:/tmp
+      # Mount the parent directory (all stacks) so every stack's bind-mounted
+      # data is in reach of the backup plans
+      - ../:/host/stacks
+      # Mount docker socket to allow running hooks (e.g. pg_dump)
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - web
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.backrest.entrypoints=https"
+      - "traefik.http.services.backrest.loadbalancer.server.port=9898"
+      - "traefik.http.routers.backrest.middlewares=secured-auth@file"
+
+networks:
+  web:
+    external: true

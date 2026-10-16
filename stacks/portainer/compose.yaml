@@ -1,0 +1,31 @@
+services:
+  portainer:
+    image: portainer/portainer-ce
+    container_name: portainer
+    restart: unless-stopped
+    networks:
+      - web
+    ports:
+      # Loopback only, for Home Assistant's Portainer integration (HA runs on
+      # the host network and cannot resolve container names).
+      - "127.0.0.1:9443:9443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.portainer-rtr.entrypoints=https"
+      - "traefik.http.routers.portainer-rtr.rule=Host(`portainer.lucask.dev`)"
+      - "traefik.http.routers.portainer-rtr.service=portainer-svc"
+      - "traefik.http.services.portainer-svc.loadbalancer.server.port=9443"
+      - "traefik.http.services.portainer-svc.loadbalancer.server.scheme=https"
+      - "traefik.http.services.portainer-svc.loadbalancer.serversTransport=insecureTransport@file"
+      - "traefik.http.routers.portainer-rtr.middlewares=secured-ws@file"
+
+volumes:
+  portainer_data:
+
+networks:
+  web:
+    external: true

@@ -1,0 +1,43 @@
+services:
+  crowdsec:
+    image: crowdsecurity/crowdsec:latest
+    container_name: crowdsec
+    ports:
+      - 127.0.0.1:9876:8080
+      - 127.0.0.1:6060:6060
+    expose:
+      - 8080   # LAPI (decisions) - traefik bouncer plugin, other bouncers
+      - 7422   # AppSec / WAF - traefik bouncer plugin inline inspection
+    environment:
+      GID: "0"
+      COLLECTIONS: "crowdsecurity/traefik crowdsecurity/http-cve crowdsecurity/base-http-scenarios crowdsecurity/sshd crowdsecurity/linux crowdsecurity/appsec-generic-rules crowdsecurity/appsec-virtual-patching crowdsecurity/appsec-crs"
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+    volumes:
+      - ./config:/etc/crowdsec/
+      - ./db:/var/lib/crowdsec/data/
+      # Traefik's access log, written by stacks/traefik
+      - ../traefik/logs:/var/log/traefik/:ro
+    networks:
+      - web
+      - grafana-monitoring
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  cloudflare-bouncer-worker:
+    image: crowdsecurity/cloudflare-worker-bouncer:latest
+    container_name: cloudflare-bouncer-worker
+    restart: unless-stopped
+    depends_on:
+      - crowdsec
+    volumes:
+      # Holds the Cloudflare API token and LAPI key - gitignored.
+      - ./bouncer-configs/crowdsec-cloudflare-worker-bouncer.yaml:/etc/crowdsec/bouncers/crowdsec-cloudflare-worker-bouncer.yaml
+    networks:
+      - web
+
+networks:
+  web:
+    external: true
+  grafana-monitoring:
+    external: true

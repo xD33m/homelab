@@ -1,0 +1,131 @@
+networks:
+  web:
+    external: true
+  grafana-monitoring:
+    external: true
+
+services:
+  traefik:
+    container_name: traefik
+    image: traefik:latest
+    restart: unless-stopped
+    entrypoint: ["/entrypoint.sh"]
+    networks:
+      - web
+      - grafana-monitoring
+    ports:
+      # HTTP/3 QUIC requires UDP port
+      - "443:443/udp"
+      # Tailnet-only entrypoint (see traefik.yml). Bound to 0.0.0.0 rather than
+      # the tailscale IP on purpose: a specific-IP bind fails with "cannot
+      # assign requested address" if tailscale0 is not up yet at boot, which
+      # would stop traefik and take down EVERY service on this host. The
+      # tailnet-only ipAllowList is what enforces access, so a LAN client that
+      # reaches this port just gets a 403. Public internet cannot reach it at
+      # all - no port forward exists, ingress is the Cloudflare tunnel only.
+      - "443:8443/tcp"
+    # Security: Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    # Security: No privilege escalation
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./acme/acme.json:/acme.json
+      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./conf.d:/conf.d:ro
+      - ./logs:/var/log/traefik
+      - ./entrypoint.sh:/entrypoint.sh:ro
+      # Plugin storage directory (must be writable for plugins)
+      - ./plugins-storage:/plugins-storage
+    environment:
+      - CF_API_EMAIL=$CF_API_EMAIL
+      - CF_API_KEY=$CF_API_KEY
+      # Session-cookie encryption key and client id for the traefik-oidc-auth
+      # middleware in conf.d; the plugin reads these ${VAR} refs from
+      # traefik's own env. Values in .env (gitignored).
+      - OIDC_SECRET_POCKETID=$OIDC_SECRET_POCKETID
+      - POCKETID_CLIENT_ID=$POCKETID_CLIENT_ID
+      - TZ=Europe/Berlin
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    labels:
+      - "traefik.enable=true"
+      # Dashboard router. The Host rule is explicit (not the defaultRule) so
+      # cloudflare-companion below can see it and create the DNS record.
+      - "traefik.http.routers.traefik-dashboard.entrypoints=https"
+      - "traefik.http.routers.traefik-dashboard.rule=Host(`traefik.lucask.dev`)"
+      - "traefik.http.routers.traefik-dashboard.service=api@internal"
+      - "traefik.http.routers.traefik-dashboard.middlewares=secured-auth-strict-ws@file"
+
+  # Creates one proxied CNAME per Host(`...`) rule it finds in container labels,
+  # pointing at the Cloudflare tunnel. This replaces the wildcard DNS records
+  # for both zones: a hostname nobody declared no longer resolves at all, so
+  # scanner traffic to made-up subdomains never reaches Cloudflare, never
+  # invokes the CrowdSec worker (100k Workers KV reads/day on the free tier)
+  # and never reaches Traefik. Adding a service is unchanged - Traefik labels
+  # only - as long as the router has an explicit Host rule; the companion
+  # cannot see hostnames derived from traefik.yml's defaultRule.
+  cloudflare-companion:
+    container_name: cloudflare-companion
+    # Pinned because we bind-mount a patched copy of its main script (below);
+    # bump the tag and re-diff the script together.
+    image: tiredofit/traefik-cloudflare-companion:7.4.0
+    restart: unless-stopped
+    networks:
+      - grafana-monitoring   # where docker-socket-proxy lives
+    volumes:
+      # Upstream 7.4.0 never notices a newly started container on Docker API
+      # >= 1.44 (it reads event fields Docker removed), so it would only create
+      # records during its start-up scan. The patched script is not published
+      # in this repo (it is a modified copy of upstream code) - see README.md.
+      - ./cloudflare-companion/cloudflare-companion.py:/usr/sbin/cloudflare-companion:ro
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - TZ=Europe/Berlin
+      # Same global key traefik uses for DNS-01 (traefik/.env). A scoped
+      # Zone:DNS:Edit token for both zones would be tighter; if you create one,
+      # set CF_TOKEN to it and leave CF_EMAIL empty.
+      - CF_EMAIL=$CF_API_EMAIL
+      - CF_TOKEN=$CF_API_KEY
+      - DOCKER_HOST=tcp://docker-socket-proxy:2375
+      # Tunnel CNAME target. Look up with: cloudflare-tunnel/cf-api.sh tunnel-config
+      - TARGET_DOMAIN=${CF_TUNNEL_ID}.cfargotunnel.com
+      # Zone ids: cloudflare-tunnel/cf-api.sh zone <domain>
+      - DOMAIN1=lucask.dev
+      - DOMAIN1_ZONE_ID=${CF_ZONE_ID_PRIMARY}
+      - DOMAIN1_PROXIED=TRUE
+      - DOMAIN1_COMMENT=cloudflare-companion (from traefik label)
+      # digimon.lucask.dev is a tailnet-only A record; the companion would
+      # otherwise overwrite it with a tunnel CNAME (it rewrites any record whose
+      # content differs, REFRESH_ENTRIES only controls records that already match).
+      - DOMAIN1_EXCLUDED_SUB_DOMAINS=digimon
+      # Second zone (real domain redacted in this public copy).
+      - DOMAIN2=${CF_SECONDARY_DOMAIN}
+      - DOMAIN2_ZONE_ID=${CF_ZONE_ID_SECONDARY}
+      - DOMAIN2_PROXIED=TRUE
+      - DOMAIN2_COMMENT=cloudflare-companion (from traefik label)
+      - REFRESH_ENTRIES=FALSE
+      - DRY_RUN=FALSE
+      - LOG_LEVEL=INFO
+      # tiredofit base-image extras we do not want (zabbix agent, cron, msmtp)
+      - CONTAINER_ENABLE_MONITORING=FALSE
+      - CONTAINER_ENABLE_SCHEDULING=FALSE
+      - CONTAINER_ENABLE_MESSAGING=FALSE
+      - CONTAINER_ENABLE_LOGROTATE=FALSE

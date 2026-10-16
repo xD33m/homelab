@@ -1,0 +1,62 @@
+# Secrets and per-host values - only *.env.example files are committed
+.env
+.env.*
+!.env.example
+
+# Keys, certificates, databases, logs
+*.pem
+*.key
+*.crt
+acme.json
+*.db
+*.db-wal
+*.db-shm
+*.sqlite3*
+*.log
+__pycache__/
+
+# Traefik runtime state, the bouncer config (LAPI key) and the patched upstream script
+stacks/traefik/acme/
+stacks/traefik/logs/
+stacks/traefik/plugins-storage/
+stacks/traefik/conf.d/crowdsec_bouncer.yml
+stacks/traefik/cloudflare-companion/
+
+# Cloudflare tunnel credentials
+stacks/cloudflare-tunnel/cloudflared/
+
+# CrowdSec: hub index, LAPI/CAPI credentials and the database are generated or secret
+stacks/crowdsec/config/*
+!stacks/crowdsec/config/acquis.yaml
+!stacks/crowdsec/config/acquis.d/
+!stacks/crowdsec/config/config.yaml
+stacks/crowdsec/db/
+stacks/crowdsec/bouncer-configs/
+
+# Monitoring: scrape token, webhook URL, Grafana state, modified upstream template
+stacks/monitoring/alloy/secrets/
+stacks/monitoring/alertmanager/secrets/
+stacks/monitoring/grafana/*
+!stacks/monitoring/grafana/provisioning/
+stacks/monitoring/docker-socket-proxy/
+
+# Service data
+stacks/backrest/config/config.json
+stacks/backrest/config/*.bak.*
+stacks/backrest/data/
+stacks/backrest/cache/
+stacks/backrest/tmp/
+stacks/beszel/beszel_data/
+stacks/beszel/beszel_agent_data/
+stacks/code-server/config/
+stacks/gitea/gitea/
+stacks/home-assistant/config/
+stacks/immich/library/
+stacks/immich/postgres/
+stacks/immich/backups/
+stacks/immich/restic-repo/
+stacks/memos/memos/
+stacks/openclaw/config/
+stacks/openclaw/workspace/
+stacks/pocket-id/data/
+stacks/qdrant/storage/

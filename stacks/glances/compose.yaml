@@ -1,0 +1,33 @@
+services:
+  glances:
+    image: nicolargo/glances:latest
+    container_name: glances
+    restart: always
+    pid: host
+    networks:
+      - web
+      - grafana-monitoring
+    ports:
+      # Loopback only, for Home Assistant (host network) - its Glances
+      # integration cannot go through Traefik's Pocket ID forward-auth.
+      - "127.0.0.1:61208:61208"
+    volumes:
+      - /etc/os-release:/etc/os-release:ro
+      - /:/rootfs:ro
+      - /sys:/sys:ro
+      - /etc/hostname:/etc/hostname:ro
+    environment:
+      - "GLANCES_OPT=-w"
+      - DOCKER_HOST=tcp://docker-socket-proxy:2375
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.glances.entrypoints=https"
+      - "traefik.http.services.glances.loadbalancer.server.port=61208"
+      - "traefik.http.routers.glances.middlewares=secured-auth@file"
+
+networks:
+  web:
+    external: true
+  grafana-monitoring:
+    external: true

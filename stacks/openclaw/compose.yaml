@@ -1,0 +1,65 @@
+networks:
+  web:
+    external: true
+  grafana-monitoring:
+    external: true
+
+services:
+  openclaw-gateway:
+    image: ${OPENCLAW_IMAGE}
+    container_name: openclaw-gateway
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - HOME=/home/node
+      - NODE_ENV=production
+      - TERM=xterm-256color
+      - OPENCLAW_GATEWAY_BIND=${OPENCLAW_GATEWAY_BIND}
+      - OPENCLAW_GATEWAY_PORT=${OPENCLAW_GATEWAY_PORT}
+      - GOG_KEYRING_PASSWORD=${GOG_KEYRING_PASSWORD}
+      - XDG_CONFIG_HOME=${XDG_CONFIG_HOME}
+    networks:
+      - web
+      - grafana-monitoring
+    volumes:
+      - ./config:/home/node/.openclaw
+      - ./workspace:/home/node/.openclaw/workspace
+      # Documentation write access — scoped bind mounts (add new doc paths here)
+      - ../docs:/home/node/docs
+      - ../docs/overrides:/home/node/docs-overrides
+      - ../zensical.toml:/home/node/zensical.toml
+    command:
+      [
+        "node",
+        "openclaw.mjs",
+        "gateway",
+        "--bind",
+        "lan",
+        "--port",
+        "18789",
+        "--allow-unconfigured",
+      ]
+    # Security: No host port binding — accessible only via Traefik on the web network
+    # Security: Container hardening
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:18789/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 300s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.openclaw-secure.entrypoints=https"
+      - "traefik.http.routers.openclaw-secure.rule=Host(`openclaw.lucask.dev`)"
+      - "traefik.http.routers.openclaw-secure.service=openclaw-secure"
+      - "traefik.http.routers.openclaw-secure.middlewares=secured-auth@file"
+      - "traefik.http.services.openclaw-secure.loadbalancer.server.port=18789"

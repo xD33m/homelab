@@ -1,0 +1,311 @@
+# Prometheus alerting rules for Pi4 observability stack
+groups:
+  - name: service_health
+    rules:
+      # Any scrape target down for >2 minutes
+      - alert: ServiceDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service {{ $labels.job }} is down"
+          description: "{{ $labels.instance }} has been unreachable for more than 2 minutes."
+
+  - name: disk_alerts
+    rules:
+      # Disk usage warning >85%
+      - alert: DiskSpaceWarning
+        expr: |
+          instance:node_filesystem:usage_percent > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk usage above 85% on {{ $labels.mountpoint }}"
+          description: "{{ $labels.mountpoint }} is at {{ printf \"%.1f\" $value }}% usage on {{ $labels.instance }}."
+
+      # Disk usage critical >95%
+      - alert: DiskSpaceCritical
+        expr: |
+          instance:node_filesystem:usage_percent > 95
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk usage above 95% on {{ $labels.mountpoint }}"
+          description: "{{ $labels.mountpoint }} is at {{ printf \"%.1f\" $value }}% usage on {{ $labels.instance }}. Immediate action required."
+
+  - name: memory_alerts
+    rules:
+      # Memory usage warning >85%
+      - alert: HighMemory
+        expr: |
+          instance:node_memory:usage_percent > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memory usage above 85%"
+          description: "Memory usage is at {{ printf \"%.1f\" $value }}% on {{ $labels.instance }}."
+
+      # Memory usage critical >95%
+      - alert: HighMemoryCritical
+        expr: |
+          instance:node_memory:usage_percent > 95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Memory usage above 95%"
+          description: "Memory usage is at {{ printf \"%.1f\" $value }}% on {{ $labels.instance }}. OOM kills likely."
+
+  - name: cpu_alerts
+    rules:
+      # CPU usage >90% sustained for 10 minutes
+      - alert: HighCPU
+        expr: |
+          instance:node_cpu:usage_percent > 90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CPU usage above 90%"
+          description: "CPU usage has been at {{ printf \"%.1f\" $value }}% for over 10 minutes on {{ $labels.instance }}."
+
+  - name: container_alerts
+    rules:
+      # Container restart looping: >3 restarts in 15 minutes
+      - alert: ContainerCrashLooping
+        expr: |
+          increase(container_start_time_seconds{job="integrations/cadvisor", instance="pi4", name!=""}[15m]) > 3
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Container {{ $labels.name }} is crash-looping"
+          description: "Container {{ $labels.name }} has restarted {{ printf \"%.0f\" $value }} times in the last 15 minutes."
+
+  - name: traefik_alerts
+    rules:
+      # Traefik 5xx error rate >5% of total requests
+      - alert: TraefikHighErrorRate
+        expr: |
+          job:traefik_error:ratio5m > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Traefik 5xx error rate above 5%"
+          description: "Traefik is returning 5xx errors at {{ humanizePercentage $value }} of total requests."
+
+  - name: temperature_alerts
+    rules:
+      # Pi temperature >75C
+      - alert: HighTemperature
+        expr: |
+          node_hwmon_temp_celsius{job="integrations/unix", instance="pi4"} > 75
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pi temperature above 75°C"
+          description: "CPU temperature is at {{ printf \"%.1f\" $value }}°C. Consider reducing load or improving cooling."
+
+  - name: stack_health
+    rules:
+      # Alloy unified collector down
+      - alert: AlloyUnhealthy
+        expr: up{job="alloy"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Alloy collector is down"
+          description: "Alloy (unified metrics and log collector) has been unreachable for more than 2 minutes. All metric and log collection is affected."
+
+      # Any Prometheus scrape target down
+      - alert: PrometheusTargetDown
+        expr: up == 0
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scrape target {{ $labels.job }}/{{ $labels.instance }} is down"
+          description: "Prometheus cannot reach {{ $labels.job }}/{{ $labels.instance }} for more than 3 minutes."
+
+      # Prometheus TSDB storage filesystem >80%
+      - alert: PrometheusStorageNearFull
+        expr: |
+          instance:node_filesystem:usage_percent{mountpoint="/"} > 80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Root filesystem usage above 80%"
+          description: "Root filesystem (hosting Prometheus TSDB) is at {{ printf \"%.1f\" $value }}% usage."
+
+      # Prometheus rule evaluation failures
+      - alert: PrometheusRuleFailures
+        expr: |
+          rate(prometheus_rule_evaluation_failures_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus rule evaluation failures detected"
+          description: "Prometheus rule group {{ $labels.rule_group }} is experiencing evaluation failures."
+
+      # Loki ingestion errors
+      - alert: LokiIngestionErrors
+        expr: |
+          rate(loki_distributor_lines_received_total{status="error"}[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Loki is experiencing ingestion errors"
+          description: "Loki is receiving log lines with errors. Logs may be lost."
+
+      # SSL certificate expiring within 14 days
+      - alert: SSLCertExpiringSoon
+        expr: |
+          (traefik_tls_certs_not_after{job="traefik"} - time()) < 1209600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "SSL certificate expiring soon"
+          description: "A TLS certificate managed by Traefik expires in {{ $value | humanizeDuration }}."
+
+  - name: container_limits
+    rules:
+      # Container memory usage >90% of limit.
+      #
+      # alloy and grafana are excluded deliberately. Both are Go services that
+      # derive GOMEMLIMIT from their own cgroup limit (Alloy sets it to ~90% of
+      # the limit automatically), which means a healthy steady state is RSS
+      # parked just under the limit - the GC has no reason to release pages
+      # until it approaches the soft limit. They sit at 99.7% and 97.0%
+      # respectively with the GC idle (alloy: one cycle per ~16s, 0.005% of
+      # wall-clock in GC, zero dropped samples, zero OOM kills in 5 days), so
+      # this rule fires permanently against them while telling us nothing.
+      # ContainerOOMKilled below is the signal that actually matters.
+      # Do not re-add them here without also setting GOGC/GOMEMLIMIT explicitly.
+      - alert: ContainerMemoryNearLimit
+        expr: |
+          container:memory:usage_percent{name!~"alloy|grafana"} > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} near memory limit"
+          description: "Container {{ $labels.name }} is using {{ printf \"%.1f\" $value }}% of its memory limit."
+
+      # A container was actually killed for exceeding its memory limit. Unlike
+      # a high RSS percentage this is unambiguous - the kernel OOM killer ran.
+      - alert: ContainerOOMKilled
+        expr: |
+          increase(container_oom_events_total{job="integrations/cadvisor", instance="pi4", name!=""}[15m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Container {{ $labels.name }} was OOM-killed"
+          description: "Container {{ $labels.name }} hit {{ printf \"%.0f\" $value }} OOM kill(s) in the last 15 minutes. Raise its memory limit or reduce what it holds in memory."
+
+  - name: crowdsec_alerts
+    rules:
+      # CrowdSec is not reporting at all - no detection, no decisions.
+      # cs_info is a gauge that is always present (its value is 0; the version
+      # is carried in a label), so absence means the engine or its scrape is gone.
+      - alert: CrowdSecDown
+        expr: |
+          absent(cs_info)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CrowdSec security engine is not reporting"
+          description: "No CrowdSec metrics for 5m. Scenario detection and the AppSec WAF are both blind. Check `docker logs crowdsec` and that Alloy can reach crowdsec:6060."
+
+      # The Traefik bouncer is deliberately fail-open, so if AppSec stops
+      # inspecting, requests are silently passed straight through with no WAF.
+      #
+      # The denominator is traefik_service_requests_total (requests that reached
+      # a real backend) and NOT entrypoint/router requests: scanner traffic to
+      # unknown subdomains is answered by the catchall router, which has no
+      # middleware and so is never inspected by AppSec. Using entrypoint or
+      # router counts here would false-fire during any quiet period where all
+      # inbound traffic is catchall noise. Every public router that reaches a
+      # service uses a secured-* chain, and every one of those includes
+      # crowdsec-bouncer, so a service request with no AppSec inspection is a
+      # genuine fault.
+      #
+      # Tailnet-only services (entrypoint `tailnet`, chains tailnet-secured /
+      # tailnet-relaxed) have no bouncer by design and must be excluded here -
+      # Home Assistant's app traffic alone kept this false-firing. Add any new
+      # tailnet service to the regex.
+      - alert: CrowdSecAppSecNotInspecting
+        expr: |
+          sum(rate(cs_appsec_reqs_total[15m])) == 0
+          and sum(rate(traefik_service_requests_total{service!~"homeassistant-svc@file|digimon@docker"}[15m])) > 0
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "AppSec WAF is not inspecting requests"
+          description: "Requests are reaching backend services but AppSec has inspected nothing for 15m. The bouncer is fail-open, so traffic is bypassing the WAF. Check the appsec datasource in crowdsec/config/acquis.d/appsec.yaml and that crowdsec:7422 is listening."
+
+      # CrowdSec stopped reading the Traefik access log, so the log-based
+      # scenarios go blind. Most likely cause is the tail losing the file after
+      # the size-based rotation in traefik/entrypoint.sh.
+      #
+      # Guarded by entrypoint requests (which counts catchall traffic too, since
+      # everything Traefik answers is written to the access log) so a genuinely
+      # quiet period does not look like a stall.
+      - alert: CrowdSecLogIngestionStalled
+        expr: |
+          sum(rate(cs_filesource_hits_total[15m])) == 0
+          and sum(rate(traefik_entrypoint_requests_total[15m])) > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CrowdSec has stopped reading the Traefik access log"
+          description: "Traefik is serving requests but CrowdSec has parsed no access-log lines for 30m. Scenario detection (scanners, CVE probes, wordpress scans) is blind. Check that /var/log/traefik/access.log is still being written and that the tail survived log rotation."
+
+      # A bouncer that stops pulling the decision stream keeps enforcing an
+      # increasingly stale view of who is banned.
+      #
+      # Bouncer names carry the client IP (traefik-bouncer-plugin@172.30.0.11),
+      # so every container restart that changes the IP leaves a dead
+      # registration behind whose series reads 0 forever. Group by the name
+      # before the @ instead: the alert fires only if NO instance of that
+      # bouncer is pulling.
+      - alert: CrowdSecBouncerStale
+        expr: |
+          sum by (bouncer_name) (
+            label_replace(
+              rate(cs_lapi_bouncer_requests_total{route="/v1/decisions/stream"}[15m]),
+              "bouncer_name", "$1", "bouncer", "([^@]+)@.*"
+            )
+          ) == 0
+        for: 20m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CrowdSec bouncer {{ $labels.bouncer_name }} stopped pulling decisions"
+          description: "Bouncer {{ $labels.bouncer_name }} has not pulled the decision stream for 20m and is enforcing stale decisions. Check the bouncer container and `cscli bouncers list`."
+
+      # Sustained burst of new local bans - an active campaign rather than the
+      # usual background scanner noise.
+      - alert: CrowdSecAttackCampaign
+        expr: |
+          sum(rate(cs_alerts[15m])) * 900 > 25
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated CrowdSec alert rate"
+          description: "{{ printf \"%.0f\" $value }} scenario alerts in the last 15m, well above the usual background rate. Check `cscli alerts list` and `cscli decisions list` for a coordinated source."

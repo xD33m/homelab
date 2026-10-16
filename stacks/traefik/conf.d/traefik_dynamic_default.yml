@@ -1,0 +1,477 @@
+http:
+    # ==========================================
+    # CATCH-ALL ROUTER - Block unknown hosts
+    # ==========================================
+    # Lowest priority router that catches any request not matched by
+    # a service-specific router. Returns 503 immediately without
+    # processing through any middleware chain. This blocks scanner
+    # traffic hitting non-existent subdomains (e.g., sso.lucask.dev,
+    # postgres.lucask.dev) that arrive via the Cloudflare wildcard tunnel.
+    routers:
+        catchall:
+            entryPoints:
+                - https
+            rule: "PathPrefix(`/`)"
+            priority: 1
+            service: unavailable
+            tls: {}
+
+    services:
+        unavailable:
+            loadBalancer:
+                servers: {}
+
+    # allow self-signed certificates for proxied web services
+    serversTransports:
+        insecureTransport:
+            insecureSkipVerify: true
+            # Connection pooling for better performance
+            maxIdleConnsPerHost: 100
+            forwardingTimeouts:
+                dialTimeout: 30s
+                responseHeaderTimeout: 30s
+                idleConnTimeout: 90s
+
+    middlewares:
+        # ==========================================
+        # SECURITY HEADERS - State of the Art 2025
+        # ==========================================
+        default-security-headers:
+            headers:
+                # XSS Protection (legacy but still useful for older browsers)
+                browserXssFilter: true
+                # Prevent MIME type sniffing
+                contentTypeNosniff: true
+                # Custom headers
+                customResponseHeaders:
+                    X-Robots-Tag: 'noindex, nofollow'
+                    # Prevent DNS prefetching
+                    X-DNS-Prefetch-Control: 'off'
+                    # Download options for IE
+                    X-Download-Options: 'noopen'
+                    # Permitted cross-domain policies
+                    X-Permitted-Cross-Domain-Policies: 'none'
+                    # Cross-Origin security headers for internet-facing services
+                    Cross-Origin-Opener-Policy: 'same-origin'
+                    Cross-Origin-Resource-Policy: 'same-origin'
+                # HSTS - Strict Transport Security
+                forceSTSHeader: true
+                stsIncludeSubdomains: true
+                stsPreload: true
+                stsSeconds: 63072000 # 2 years
+                # Frame options - use CSP frame-ancestors instead
+                customFrameOptionsValue: 'SAMEORIGIN'
+                # Referrer Policy
+                referrerPolicy: 'strict-origin-when-cross-origin'
+                # Content Security Policy (restrictive default - customize per service)
+                # Note: 'unsafe-inline' kept for compatibility, remove if your apps support nonces
+                contentSecurityPolicy: |
+                    default-src 'self';
+                    script-src 'self' 'unsafe-inline';
+                    style-src 'self' 'unsafe-inline';
+                    img-src 'self' data: https:;
+                    font-src 'self' data:;
+                    connect-src 'self' https: wss:;
+                    frame-ancestors 'self';
+                    form-action 'self';
+                    base-uri 'self';
+                    object-src 'none';
+                    upgrade-insecure-requests;
+                # Permissions Policy (only standardized directives per MDN spec)
+                permissionsPolicy: >-
+                    accelerometer=(),
+                    autoplay=(),
+                    camera=(),
+                    cross-origin-isolated=(),
+                    display-capture=(),
+                    encrypted-media=(),
+                    fullscreen=(self),
+                    geolocation=(),
+                    gyroscope=(),
+                    magnetometer=(),
+                    microphone=(),
+                    midi=(),
+                    payment=(),
+                    picture-in-picture=(),
+                    publickey-credentials-get=(),
+                    screen-wake-lock=(),
+                    usb=(),
+                    web-share=(),
+                    xr-spatial-tracking=()
+
+        # Relaxed security headers for apps that need iframes/scripts
+        relaxed-security-headers:
+            headers:
+                browserXssFilter: true
+                contentTypeNosniff: true
+                forceSTSHeader: true
+                stsIncludeSubdomains: true
+                stsPreload: true
+                stsSeconds: 63072000
+                referrerPolicy: 'strict-origin-when-cross-origin'
+                customResponseHeaders:
+                    X-DNS-Prefetch-Control: 'off'
+                    X-Download-Options: 'noopen'
+                    # Allow cross-origin for relaxed mode
+                    Cross-Origin-Opener-Policy: 'same-origin-allow-popups'
+                    Cross-Origin-Resource-Policy: 'cross-origin'
+
+        # ==========================================
+        # RATE LIMITING
+        # ==========================================
+        rate-limit:
+            rateLimit:
+                average: 100           # 100 requests per second average
+                burst: 200             # Allow bursts up to 200
+                period: 1s
+                sourceCriterion:
+                    ipStrategy:
+                        depth: 1       # Use first forwarded IP (Cloudflare)
+                        excludedIPs:
+                            - 127.0.0.1/32
+                            - 10.0.0.0/8
+                            - 172.16.0.0/12
+                            - 192.168.0.0/16
+
+        # Stricter rate limit for authentication endpoints
+        rate-limit-strict:
+            rateLimit:
+                average: 10
+                burst: 20
+                period: 1s
+                sourceCriterion:
+                    ipStrategy:
+                        depth: 1
+
+        # Very strict rate limit for login endpoints (anti brute-force)
+        rate-limit-login:
+            rateLimit:
+                average: 3
+                burst: 5
+                period: 1m
+                sourceCriterion:
+                    ipStrategy:
+                        depth: 1
+                        excludedIPs:
+                            - 127.0.0.1/32
+
+        # API rate limit (for public API endpoints)
+        rate-limit-api:
+            rateLimit:
+                average: 50
+                burst: 100
+                period: 1s
+                sourceCriterion:
+                    ipStrategy:
+                        depth: 1
+
+        # ==========================================
+        # COMPRESSION
+        # ==========================================
+        compress:
+            compress:
+                excludedContentTypes:
+                    - text/event-stream
+                    - image/jpeg
+                    - image/png
+                    - image/gif
+                    - image/webp
+                    - application/zip
+                    - application/gzip
+                minResponseBodyBytes: 1024   # Only compress responses > 1KB
+                # Traefik uses gzip by default, zstd/br if client supports
+
+        # ==========================================
+        # RETRY & CIRCUIT BREAKER
+        # ==========================================
+        retry:
+            retry:
+                attempts: 3
+                initialInterval: 100ms
+
+        # Circuit breaker to prevent cascading failures
+        circuit-breaker:
+            circuitBreaker:
+                expression: "NetworkErrorRatio() > 0.30 || ResponseCodeRatio(500, 600, 0, 600) > 0.25"
+                checkPeriod: 10s
+                fallbackDuration: 30s
+                recoveryDuration: 60s
+
+        # ==========================================
+        # REQUEST SIZE LIMITING (Anti-DoS)
+        # ==========================================
+        # Default request size limit (10MB) - prevents large payload attacks
+        request-size-limit:
+            buffering:
+                maxRequestBodyBytes: 10485760    # 10MB max request body
+                memRequestBodyBytes: 2097152     # 2MB in memory, rest to disk
+                maxResponseBodyBytes: 0          # No limit on response
+                # NOTE: do not add retryExpression here. A retry expression
+                # forces oxy to buffer the *response* so it can decide whether
+                # to retry, and it then fails on any response that has no body
+                # at all ("failed to read response, err: no data ready"),
+                # rewriting it as a 500. Bodyless 3xx redirects are the common
+                # case. Use Traefik s dedicated retry middleware if retries
+                # are actually wanted.
+
+        # Larger limit for file upload services (100MB)
+        request-size-limit-large:
+            buffering:
+                maxRequestBodyBytes: 104857600   # 100MB for file uploads
+                memRequestBodyBytes: 10485760    # 10MB in memory
+                maxResponseBodyBytes: 0
+
+        # Small request limit for API/login endpoints (1MB)
+        request-size-limit-small:
+            buffering:
+                maxRequestBodyBytes: 1048576     # 1MB for login/API
+                memRequestBodyBytes: 524288      # 512KB in memory
+                maxResponseBodyBytes: 0
+
+        # ==========================================
+        # IP WHITELISTING
+        # ==========================================
+        # Whitelist for local network only access
+        local-only:
+            ipAllowList:
+                sourceRange:
+                    - 127.0.0.1/32
+                    - 10.0.0.0/8
+                    - 172.16.0.0/12
+                    - 192.168.0.0/16
+
+        # Dashboard access - local + VPN only
+        dashboard-whitelist:
+            ipAllowList:
+                sourceRange:
+                    - 127.0.0.1/32
+                    - 10.0.0.0/8
+                    - 172.16.0.0/12
+                    - 192.168.0.0/16
+                ipStrategy:
+                    depth: 1
+
+        # Tailscale tailnet only: the CGNAT v4 range every tailnet uses, plus
+        # this tailnet's ULA v6 prefix. Only meaningful on the `tailnet`
+        # entrypoint, where the TCP peer really is the tailscale client.
+        #
+        # No ipStrategy on purpose (contrast dashboard-whitelist above): the
+        # default strategy reads the real socket peer, so a forged
+        # X-Forwarded-For cannot get past it. depth: 1 would trust the header.
+        tailnet-only:
+            ipAllowList:
+                sourceRange:
+                    - 100.64.0.0/10
+                    - fd7a:115c:a1e0::/48
+                    # Docker SNATs traffic arriving through tailscale0 to the
+                    # Traefik-facing grafana-monitoring bridge gateway. Keep
+                    # this to the single observed gateway, not the subnet.
+                    - 172.30.0.1/32
+
+        # ==========================================
+        # AUTHENTICATION MIDDLEWARES
+        # ==========================================
+        # CrowdSec bouncer middleware defined in crowdsec_bouncer.yml (untracked, contains LAPI key)
+
+        pocketid-auth:
+            plugin:
+                traefik-oidc-auth:
+                    # Without this the plugin falls back to its hardcoded
+                    # DefaultSecret, which is public in the plugin source, so
+                    # anyone could decrypt a captured session cookie and lift
+                    # the refresh token out of it. Value lives in traefik/.env.
+                    Secret: "${OIDC_SECRET_POCKETID}"
+                    Provider:
+                        Url: "https://pocketid.lucask.dev/"
+                        ClientId: "${POCKETID_CLIENT_ID}"
+                        UsePkce: true
+                    Scopes: ["openid", "profile", "email"]
+                    Headers:
+                        - Name: "X-Forwarded-User"
+                          Value: "{{`{{ .claims.email }}`}}"
+
+        # ==========================================
+        # MIDDLEWARE CHAINS
+        # ==========================================
+        # Chain for secured services (rate limit + security headers + compression + crowdsec)
+        secured:
+            chain:
+                middlewares:
+                    - rate-limit
+                    - default-security-headers
+                    - compress
+                    - crowdsec-bouncer
+
+        # Chain for authenticated services
+        secured-auth:
+            chain:
+                middlewares:
+                    - rate-limit
+                    - default-security-headers
+                    - compress
+                    - crowdsec-bouncer
+                    - pocketid-auth
+
+        # Chain for tailnet-only services. Reaching the tailnet IS the auth, so
+        # no pocket-id here. crowdsec is also dropped: it exists to score
+        # untrusted internet traffic, and none can arrive on this entrypoint -
+        # feeding it tailnet IPs would only pollute its decisions.
+        tailnet-secured:
+            chain:
+                middlewares:
+                    - tailnet-only
+                    - default-security-headers
+                    - compress
+
+        # tailnet-secured with relaxed headers, for apps the default
+        # Permissions-Policy/CSP breaks (Home Assistant: mic for Assist,
+        # camera, geolocation).
+        tailnet-relaxed:
+            chain:
+                middlewares:
+                    - tailnet-only
+                    - relaxed-security-headers
+                    - compress
+
+        # Chain for file upload services (larger request limit)
+        secured-upload:
+            chain:
+                middlewares:
+                    - rate-limit
+                    - default-security-headers
+                    - compress
+                    - crowdsec-bouncer
+
+        # Chain for login/auth endpoints (stricter rate limiting + smaller requests)
+        secured-login:
+            chain:
+                middlewares:
+                    - rate-limit-login
+                    - default-security-headers
+                    - crowdsec-bouncer
+
+        # Chain for API endpoints
+        secured-api:
+            chain:
+                middlewares:
+                    - rate-limit-api
+                    - default-security-headers
+                    - compress
+                    - crowdsec-bouncer
+
+        # Chain with relaxed security (for apps needing iframes/external scripts)
+        secured-relaxed:
+            chain:
+                middlewares:
+                    - rate-limit
+                    - relaxed-security-headers
+                    - compress
+                    - crowdsec-bouncer
+
+        # Chain for WebSocket/streaming services (no buffering)
+        # Use this for services that rely on WebSockets or long-lived connections
+        # The buffering middleware breaks WS upgrades, so it's excluded here
+        secured-ws:
+            chain:
+                middlewares:
+                    - rate-limit
+                    - default-security-headers
+                    - compress
+                    - crowdsec-bouncer
+
+        # Chain for authenticated WebSocket/streaming services (no buffering)
+        secured-auth-ws:
+            chain:
+                middlewares:
+                    - rate-limit
+                    - default-security-headers
+                    - compress
+                    - crowdsec-bouncer
+                    - pocketid-auth
+
+        # Chain with relaxed security for SSE/streaming apps (no response buffering)
+        # Use this for apps that rely on Server-Sent Events (e.g., PocketBase realtime)
+        # The buffering middleware blocks SSE streams, so it's excluded here
+        secured-relaxed-sse:
+            chain:
+                middlewares:
+                    - rate-limit
+                    - relaxed-security-headers
+                    - compress
+                    - crowdsec-bouncer
+
+        # Chain with relaxed security + PocketID auth
+        secured-relaxed-auth:
+            chain:
+                middlewares:
+                    - rate-limit
+                    - relaxed-security-headers
+                    - compress
+                    - crowdsec-bouncer
+                    - pocketid-auth
+
+        # Chain for authenticated dashboard/admin (stricter rate limiting)
+        secured-auth-strict:
+            chain:
+                middlewares:
+                    - rate-limit-strict
+                    - default-security-headers
+                    - compress
+                    - crowdsec-bouncer
+                    - pocketid-auth
+
+        # Same as secured-auth-strict but WITHOUT buffering. The Traefik
+        # dashboard streams its live data, and the buffering middleware chokes
+        # on streamed responses ("vulcand/oxy/buffer: failed to read response,
+        # err: no data ready"). Use this for admin UIs that stream.
+        secured-auth-strict-ws:
+            chain:
+                middlewares:
+                    - rate-limit-strict
+                    - default-security-headers
+                    - compress
+                    - crowdsec-bouncer
+                    - pocketid-auth
+
+# ==========================================
+# TLS OPTIONS - Modern Security Standards
+# ==========================================
+tls:
+    options:
+        # Default TLS configuration - TLS 1.3 only for maximum security
+        # All routers MUST use the same TLS options to avoid 421 errors
+        default:
+            minVersion: VersionTLS13
+            sniStrict: false
+
+        # Intermediate TLS configuration (TLS 1.2+ for wider compatibility)
+        intermediate:
+            minVersion: VersionTLS12
+            sniStrict: false
+            cipherSuites:
+                # TLS 1.3 ciphers (automatically negotiated when using TLS 1.3)
+                # TLS 1.2 ciphers - ECDHE with AEAD
+                - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+                - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+                - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+                - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+                - TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
+                - TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+            curvePreferences:
+                - X25519
+                - CurveP256
+                - CurveP384
+
+        # Legacy configuration (for very old clients - use sparingly)
+        legacy:
+            minVersion: VersionTLS12
+            cipherSuites:
+                - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+                - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+                - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+                - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+                - TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
+                - TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+                - TLS_AES_128_GCM_SHA256
+                - TLS_AES_256_GCM_SHA384
+                - TLS_CHACHA20_POLY1305_SHA256

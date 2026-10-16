@@ -1,0 +1,208 @@
+{
+  "modno": 7,
+  "version": 4,
+  "instance": "homelab",
+  "repos": [
+    {
+      "id": "local_backups",
+      "uri": "/data/backups",
+      "guid": "YOUR_GUID_HERE",
+      "password": "YOUR_SECURE_PASSWORD_HERE"
+    },
+    {
+      "id": "immich_restic",
+      "uri": "/host/stacks/immich/restic-repo",
+      "guid": "YOUR_GUID_HERE",
+      "password": "YOUR_SECURE_PASSWORD_HERE"
+    }
+  ],
+  "plans": [
+    {
+      "id": "all_configs",
+      "repo": "local_backups",
+      "paths": [
+        "/host/stacks"
+      ],
+      "excludes": [
+        "**/node_modules/**",
+        "**/.git/**",
+        "**/backrest/data/**",
+        "**/backrest/cache/**",
+        "**/_work/**",
+        "**/_diag/**",
+        "**/bin.*/**",
+        "**/externals.*/**",
+        "**/logs/**",
+        "**/tmp/**",
+        "**/cache/**",
+        "**/thumbs/**",
+        "**/immich/postgres/**",
+        "**/immich/library/**",
+        "**/immich/restic-repo/**",
+        "**/gitea/gitea/**",
+        "**/beszel/beszel_data/**",
+        "**/code-server/config/**",
+        "**/crowdsec/config/**",
+        "**/crowdsec/db/**",
+        "**/grafana-monitoring/grafana/**",
+        "**/memos/memos/**",
+        "**/home-assistant/config/home-assistant_v2.db*",
+        "**/home-assistant/config/deps/**"
+      ],
+      "schedule": {
+        "cron": "0 3 * * *"
+      },
+      "retention": {
+        "policyTimeBucketed": {
+          "keepLastN": 14
+        }
+      }
+    },
+    {
+      "id": "beszel_data",
+      "repo": "local_backups",
+      "paths": [
+        "/host/stacks/beszel/beszel_data"
+      ],
+      "schedule": {
+        "cron": "0 3 * * *"
+      },
+      "retention": {
+        "policyTimeBucketed": {
+          "keepLastN": 14
+        }
+      }
+    },
+    {
+      "id": "code_server_config",
+      "repo": "local_backups",
+      "paths": [
+        "/host/stacks/code-server/config"
+      ],
+      "schedule": {
+        "cron": "0 3 * * *"
+      },
+      "retention": {
+        "policyTimeBucketed": {
+          "keepLastN": 14
+        }
+      }
+    },
+    {
+      "id": "crowdsec_data",
+      "repo": "local_backups",
+      "paths": [
+        "/host/stacks/crowdsec/config",
+        "/host/stacks/crowdsec/db"
+      ],
+      "schedule": {
+        "cron": "0 3 * * *"
+      },
+      "retention": {
+        "policyTimeBucketed": {
+          "keepLastN": 14
+        }
+      }
+    },
+    {
+      "id": "gitea_data",
+      "repo": "local_backups",
+      "paths": [
+        "/host/stacks/gitea/gitea"
+      ],
+      "excludes": [
+        "**/log/**",
+        "**/tmp/**",
+        "**/indexers/**",
+        "**/queues/**"
+      ],
+      "schedule": {
+        "cron": "0 3 * * *"
+      },
+      "retention": {
+        "policyTimeBucketed": {
+          "keepLastN": 14
+        }
+      }
+    },
+    {
+      "id": "grafana_data",
+      "repo": "local_backups",
+      "paths": [
+        "/host/stacks/grafana-monitoring/grafana"
+      ],
+      "excludes": [
+        "**/png/**",
+        "**/csv/**"
+      ],
+      "schedule": {
+        "cron": "0 3 * * *"
+      },
+      "retention": {
+        "policyTimeBucketed": {
+          "keepLastN": 14
+        }
+      }
+    },
+    {
+      "id": "immich_backup",
+      "repo": "immich_restic",
+      "paths": [
+        "/host/stacks/immich/library"
+      ],
+      "excludes": [
+        "**/thumbs/**",
+        "**/encoded-video/**"
+      ],
+      "schedule": {
+        "cron": "0 4 * * *"
+      },
+      "retention": {
+        "policyTimeBucketed": {
+          "keepLastN": 14
+        }
+      },
+      "hooks": [
+        {
+          "conditions": [
+            "CONDITION_SNAPSHOT_START"
+          ],
+          "actionCommand": {
+            "command": "docker exec immich_postgres pg_dump --clean --if-exists -U postgres -d immich > /host/stacks/immich/library/database-backup/immich-database.sql"
+          }
+        }
+      ]
+    },
+    {
+      "id": "memos_data",
+      "repo": "local_backups",
+      "paths": [
+        "/host/stacks/memos/memos"
+      ],
+      "schedule": {
+        "cron": "0 3 * * *"
+      },
+      "retention": {
+        "policyTimeBucketed": {
+          "keepLastN": 14
+        }
+      }
+    }
+  ],
+  "auth": {
+    "disabled": true,
+    "users": [
+      {
+        "name": "your_username",
+        "passwordBcrypt": "YOUR_BCRYPT_HASH_HERE"
+      }
+    ]
+  },
+  "sync": {
+    "identity": {
+      "keyId": "YOUR_KEY_ID_HERE",
+      "ed25519priv": "YOUR_PRIVATE_KEY_HERE",
+      "ed25519pub": "YOUR_PUBLIC_KEY_HERE"
+    }
+  }
+}

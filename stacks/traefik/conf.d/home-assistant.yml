@@ -1,0 +1,26 @@
+# home-assistant: tailnet-only route to ../../home-assistant/docker-compose.yml.
+#
+# Why a file here instead of container labels: HA runs with network_mode: host,
+# and the Docker provider would point a host-network router at traefik's own
+# loopback. 172.18.0.1 is the host's address on the `web` bridge (gateway of
+# 172.18.0.0/16), so HA sees traefik's `web` IP as the peer - that subnet is
+# what HA's trusted proxies list.
+#
+# DNS: ha.lucask.dev is a manual, DNS-only A record to the Pi's tailscale IP
+# (<tailscale-ip>), like digimon. cloudflare-companion never sees file-provider
+# routers, so it cannot overwrite it and needs no exclusion.
+http:
+    routers:
+        homeassistant-rtr:
+            entryPoints:
+                - tailnet
+            rule: "Host(`ha.lucask.dev`)"
+            service: homeassistant-svc
+            middlewares:
+                - tailnet-relaxed@file
+
+    services:
+        homeassistant-svc:
+            loadBalancer:
+                servers:
+                    - url: "http://172.18.0.1:8123"

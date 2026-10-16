@@ -1,0 +1,27 @@
+services:
+  pocket-id:
+    image: ghcr.io/pocket-id/pocket-id:latest
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - 1411:1411
+    volumes:
+      - "./data:/app/data"
+    networks:
+      - web
+    healthcheck:
+      test: ["CMD", "/app/pocket-id", "healthcheck"]
+      interval: 1m30s
+      timeout: 5s
+      retries: 2
+      start_period: 10s
+    labels:
+      traefik.enable: true
+      traefik.http.routers.pocket-id.entryPoints: https
+      traefik.http.routers.pocket-id.rule: Host(`pocketid.lucask.dev`)
+      traefik.http.services.pocket-id-svc.loadbalancer.server.port: 1411
+      traefik.http.routers.pocket-id.middlewares: secured-relaxed@file
+
+networks:
+  web:
+    external: true

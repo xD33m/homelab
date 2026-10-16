@@ -1,0 +1,46 @@
+# AlertManager configuration for Pi4 observability stack
+# Routes alerts to a Home Assistant webhook automation, which pushes them to
+# the phone (automation.homelab_alertmanager_push). The webhook URL is the
+# secret, so it lives in secrets/ha_webhook_url (gitignored, owned by nobody).
+
+route:
+  # Default receiver
+  receiver: 'homeassistant'
+  # Group alerts by name and severity
+  group_by: ['alertname', 'severity']
+  # Default timing (warning-level)
+  group_wait: 5m
+  group_interval: 5m
+  repeat_interval: 4h
+
+  routes:
+    # Critical alerts: send immediately with minimal grouping delay
+    - matchers:
+        - severity="critical"
+      receiver: 'homeassistant'
+      group_wait: 30s
+      group_interval: 1m
+      repeat_interval: 1h
+
+# Inhibition rules: suppress warnings when a critical alert exists for the same target
+inhibit_rules:
+  - source_matchers:
+      - severity="critical"
+    target_matchers:
+      - severity="warning"
+    equal: ['alertname', 'instance']
+
+  # ServiceDown suppresses all other alerts for the same job
+  - source_matchers:
+      - alertname="ServiceDown"
+    target_matchers:
+      - alertname!="ServiceDown"
+    equal: ['job']
+
+receivers:
+  - name: 'homeassistant'
+    webhook_configs:
+      # http://172.18.0.1:8123/api/webhook/<id> - HA runs on the host network,
+      # reached through the `web` bridge gateway. The automation is local_only.
+      - url_file: /etc/alertmanager/secrets/ha_webhook_url
+        send_resolved: true

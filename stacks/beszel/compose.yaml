@@ -1,0 +1,38 @@
+services:
+  beszel:
+    image: 'henrygd/beszel'
+    container_name: 'beszel'
+    restart: always
+    networks:
+      - web
+    volumes:
+      - ./beszel_data:/beszel_data
+    environment:
+      APP_URL: "https://beszel.lucask.dev"
+      DISABLE_PASSWORD_AUTH: "true"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.beszel.entrypoints=https"
+      - "traefik.http.routers.beszel.rule=Host(`beszel.lucask.dev`)"
+      - "traefik.http.services.beszel.loadbalancer.server.port=8090"
+      - "traefik.http.services.beszel.loadbalancer.responseForwarding.flushInterval=-1"
+      - "traefik.http.routers.beszel.middlewares=secured-relaxed-sse@file"
+
+  beszel-agent:
+    image: 'henrygd/beszel-agent'
+    container_name: 'beszel-agent'
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket:ro
+      - ./beszel_agent_data:/var/lib/beszel-agent
+    environment:
+      LISTEN: 45876
+      KEY: ${KEY}
+      TOKEN: ${TOKEN}
+      HUB_URL: https://beszel.lucask.dev
+
+networks:
+  web:
+    external: true

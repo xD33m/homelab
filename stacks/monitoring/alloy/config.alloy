@@ -1,0 +1,296 @@
+// ============================================================================
+// Grafana Alloy configuration for Pi4
+// Collects: Docker container logs + systemd journal + host metrics + container metrics
+// Sends to: Loki (logs), Prometheus (metrics via remote_write)
+// ============================================================================
+
+// ============================================================================
+// METRICS COLLECTION
+// ============================================================================
+
+// --- Host system metrics (replaces standalone node-exporter) ---
+
+prometheus.exporter.unix "node" {
+  disable_collectors = ["ipvs", "btrfs", "infiniband", "xfs", "zfs"]
+  enable_collectors  = ["meminfo"]
+
+  filesystem {
+    fs_types_exclude     = "^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|tmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs)$"
+    mount_points_exclude = "^/(dev|proc|sys|run/credentials/.+|var/lib/docker/.+)($|/)"
+    mount_timeout        = "5s"
+  }
+
+  netclass {
+    ignored_devices = "^(veth.*|cali.*|[a-f0-9]{15})$"
+  }
+
+  netdev {
+    device_exclude = "^(veth.*|cali.*|[a-f0-9]{15})$"
+  }
+}
+
+// Stable labels for node exporter (prevents new series on Alloy container restarts)
+discovery.relabel "node" {
+  targets = prometheus.exporter.unix.node.targets
+
+  rule {
+    target_label = "instance"
+    replacement  = "pi4"
+  }
+}
+
+prometheus.scrape "node" {
+  scrape_interval = "15s"
+  targets         = discovery.relabel.node.output
+  forward_to      = [prometheus.remote_write.prometheus.receiver]
+}
+
+// --- Container metrics (replaces standalone cAdvisor) ---
+
+prometheus.exporter.cadvisor "containers" {
+  docker_host              = "unix:///var/run/docker.sock"
+  docker_only              = true
+  store_container_labels   = false
+  allowlisted_container_labels = ["com.docker.compose.service", "com.docker.compose.project"]
+  // Only the newest sample is exported, so history is pure memory cost; the
+  // old 5m held ~300 per-second samples per container (~60MB of heap).
+  storage_duration         = "2m"
+
+  // Alloy's real defaults (the docs omit "sched") plus "disk". Per-container filesystem usage
+  // (container_fs_usage_bytes etc.) means a statfs/stat walk for every
+  // container on every 1s housekeeping tick - a CPU profile showed it at ~35%
+  // of Alloy's total CPU, and no dashboard or rule reads it. "diskIO"
+  // (container_fs_reads/writes_bytes_total) stays enabled.
+  disabled_metrics = [
+    "advtcp", "cpu_topology", "cpuset", "hugetlb", "memory_numa", "process",
+    "referenced_memory", "resctrl", "sched", "tcp", "udp",
+    "disk",
+  ]
+}
+
+// Stable labels for cadvisor (prevents new series on Alloy container restarts)
+discovery.relabel "cadvisor" {
+  targets = prometheus.exporter.cadvisor.containers.targets
+
+  rule {
+    target_label = "instance"
+    replacement  = "pi4"
+  }
+}
+
+prometheus.scrape "cadvisor" {
+  scrape_interval = "30s"
+  scrape_timeout  = "25s"
+  targets         = discovery.relabel.cadvisor.output
+  forward_to      = [prometheus.remote_write.prometheus.receiver]
+}
+
+// --- Traefik reverse proxy metrics ---
+
+prometheus.scrape "traefik" {
+  scrape_interval = "15s"
+  targets         = [
+    { "__address__" = "traefik:8082", "job" = "traefik" },
+  ]
+  forward_to = [prometheus.remote_write.prometheus.receiver]
+}
+
+// --- CrowdSec IDS metrics ---
+
+prometheus.scrape "crowdsec" {
+  scrape_interval = "15s"
+  targets         = [
+    { "__address__" = "crowdsec:6060", "job" = "crowdsec" },
+  ]
+  forward_to = [prometheus.remote_write.prometheus.receiver]
+}
+
+// --- Home Assistant entity states ---
+// HA runs with network_mode: host, so it is reached via the host's address on
+// the `web` bridge. /api/prometheus needs a long-lived access token; the token
+// file is gitignored (monitoring/alloy/secrets/). Metric names are
+// prefixed hass_ (namespace in HA's configuration.yaml).
+
+prometheus.scrape "homeassistant" {
+  scrape_interval = "60s"
+  metrics_path    = "/api/prometheus"
+  targets         = [
+    { "__address__" = "172.18.0.1:8123", "job" = "homeassistant", "instance" = "pi4" },
+  ]
+  authorization {
+    type             = "Bearer"
+    credentials_file = "/etc/alloy/secrets/homeassistant_token"
+  }
+  forward_to = [prometheus.remote_write.prometheus.receiver]
+}
+
+// --- Alloy self-monitoring ---
+
+prometheus.scrape "alloy_self" {
+  scrape_interval = "30s"
+  targets         = [
+    { "__address__" = "localhost:12345", "job" = "alloy" },
+  ]
+  forward_to = [prometheus.remote_write.prometheus.receiver]
+}
+
+// --- Prometheus remote write output ---
+
+prometheus.remote_write "prometheus" {
+  endpoint {
+    url = "http://prometheus:9090/api/v1/write"
+  }
+}
+
+// ============================================================================
+// LOG COLLECTION
+// ============================================================================
+
+// --- Docker container log collection ---
+
+// Discover Docker containers via socket proxy
+discovery.docker "containers" {
+  host             = "tcp://docker-socket-proxy:2375"
+  refresh_interval = "60s"
+}
+
+// Relabel to extract useful metadata
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  // Extract container name (strip leading /)
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container_name"
+  }
+
+  // Extract compose service name
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "compose_service"
+  }
+
+  // Extract compose project name
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "compose_project"
+  }
+
+  // Set host label
+  rule {
+    target_label = "host"
+    replacement  = "pi4"
+  }
+
+  // Set job label
+  rule {
+    target_label = "job"
+    replacement  = "docker"
+  }
+
+  // Drop docker-socket-proxy to break the feedback loop:
+  // Alloy polls the proxy for discovery, the proxy logs each request,
+  // Alloy tails those logs, generating massive circular log traffic.
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(docker-socket-proxy)"
+    action        = "drop"
+  }
+}
+
+// Scrape Docker container logs
+loki.source.docker "containers" {
+  host       = "tcp://docker-socket-proxy:2375"
+  targets    = discovery.relabel.containers.output
+  forward_to = [loki.process.docker.receiver]
+}
+
+// Process Docker logs: parse Docker format, attempt JSON extraction, enrich metadata
+loki.process "docker" {
+  // Parse Docker JSON log wrapper (extracts timestamp, stream, log message)
+  stage.docker {}
+
+  // Attempt to parse log content as JSON (non-JSON lines pass through unchanged)
+  stage.json {
+    expressions = {
+      level  = "level",
+      msg    = "msg",
+      status = "status",
+    }
+  }
+
+  // Set level as a label when present (enables log volume dashboards by severity)
+  stage.labels {
+    values = {
+      level = "",
+    }
+  }
+
+  // Attach extracted fields as structured metadata (enables filtering without regex)
+  stage.structured_metadata {
+    values = {
+      status = "",
+      msg    = "",
+    }
+  }
+
+  forward_to = [loki.write.loki.receiver]
+}
+
+// --- Systemd journal collection ---
+
+// Relabel rules for journal entries
+discovery.relabel "journal" {
+  targets = []
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+
+  rule {
+    source_labels = ["__journal__hostname"]
+    target_label  = "hostname"
+  }
+
+  rule {
+    source_labels = ["__journal_syslog_identifier"]
+    target_label  = "syslog_identifier"
+  }
+
+  rule {
+    source_labels = ["__journal__boot_id"]
+    target_label  = "boot_id"
+  }
+
+  rule {
+    source_labels = ["__journal__transport"]
+    target_label  = "transport"
+  }
+
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+}
+
+// Read from systemd journal
+loki.source.journal "journal" {
+  max_age       = "12h"
+  path          = "/var/log/journal"
+  relabel_rules = discovery.relabel.journal.rules
+  forward_to    = [loki.write.loki.receiver]
+  labels        = {
+    job  = "systemd-journal",
+    host = "pi4",
+  }
+}
+
+// --- Loki output ---
+
+loki.write "loki" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

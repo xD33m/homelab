@@ -1,0 +1,21 @@
+extends: default
+
+ignore: |
+  stacks/monitoring/grafana/provisioning/dashboards/json/
+
+rules:
+  # Compose and Traefik files here are not multi-document streams.
+  document-start: disable
+  # Long label values and PromQL expressions read better on one line.
+  line-length:
+    max: 200
+    level: warning
+  # Compose labels use `traefik.enable: true`; keys like `on` do not occur.
+  truthy:
+    check-keys: false
+  comments:
+    min-spaces-from-content: 1
+  # Files keep their original 2- or 4-space style; each file must be consistent.
+  indentation:
+    spaces: consistent
+    indent-sequences: whatever

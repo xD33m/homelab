@@ -1,0 +1,154 @@
+# Prometheus recording rules for Pi4 observability stack
+# Pre-compute expensive dashboard queries to reduce load on every refresh
+groups:
+  # --- Node-level metrics (from Alloy unix exporter) ---
+  - name: node_recording_rules
+    interval: 15s
+    rules:
+      # CPU usage percentage (100 - idle)
+      - record: instance:node_cpu:usage_percent
+        expr: |
+          100 - (avg by (instance) (irate(node_cpu_seconds_total{job="integrations/unix", instance="pi4", mode="idle"}[5m])) * 100)
+
+      # Memory usage percentage
+      - record: instance:node_memory:usage_percent
+        expr: |
+          (1 - node_memory_MemAvailable_bytes{job="integrations/unix", instance="pi4"} / node_memory_MemTotal_bytes{job="integrations/unix", instance="pi4"}) * 100
+
+      # Memory used bytes (total - available)
+      - record: instance:node_memory:used_bytes
+        expr: |
+          node_memory_MemTotal_bytes{job="integrations/unix", instance="pi4"} - node_memory_MemAvailable_bytes{job="integrations/unix", instance="pi4"}
+
+      # Memory total bytes
+      - record: instance:node_memory:total_bytes
+        expr: |
+          node_memory_MemTotal_bytes{job="integrations/unix", instance="pi4"}
+
+      # Memory available bytes
+      - record: instance:node_memory:available_bytes
+        expr: |
+          node_memory_MemAvailable_bytes{job="integrations/unix", instance="pi4"}
+
+      # Filesystem usage percentage (per mountpoint, excluding tmpfs/overlay)
+      - record: instance:node_filesystem:usage_percent
+        expr: |
+          (1 - node_filesystem_avail_bytes{job="integrations/unix", instance="pi4", fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{job="integrations/unix", instance="pi4", fstype!~"tmpfs|overlay"}) * 100
+
+      # Filesystem available bytes
+      - record: instance:node_filesystem:avail_bytes
+        expr: |
+          node_filesystem_avail_bytes{job="integrations/unix", instance="pi4", fstype!~"tmpfs|overlay"}
+
+      # Filesystem total size bytes
+      - record: instance:node_filesystem:size_bytes
+        expr: |
+          node_filesystem_size_bytes{job="integrations/unix", instance="pi4", fstype!~"tmpfs|overlay"}
+
+      # Network receive rate (per device, excluding loopback)
+      - record: instance:node_network:receive_bytes_rate
+        expr: |
+          rate(node_network_receive_bytes_total{job="integrations/unix", instance="pi4", device!="lo"}[5m])
+
+      # Network transmit rate (per device, excluding loopback)
+      - record: instance:node_network:transmit_bytes_rate
+        expr: |
+          rate(node_network_transmit_bytes_total{job="integrations/unix", instance="pi4", device!="lo"}[5m])
+
+      # CPU temperature
+      - record: instance:node_temperature:celsius
+        expr: |
+          node_hwmon_temp_celsius{job="integrations/unix", instance="pi4"}
+
+      # System uptime in seconds
+      - record: instance:node_uptime:seconds
+        expr: |
+          time() - node_boot_time_seconds{job="integrations/unix", instance="pi4"}
+
+      # Load average (1 minute)
+      - record: instance:node_load1:value
+        expr: |
+          node_load1{job="integrations/unix", instance="pi4"}
+
+  # --- Container-level metrics (from Alloy cadvisor exporter) ---
+  - name: container_recording_rules
+    interval: 30s
+    rules:
+      # Per-container CPU usage percentage (sum by name to deduplicate after container recreates)
+      - record: container:cpu:usage_percent
+        expr: |
+          sum by (name) (rate(container_cpu_usage_seconds_total{job="integrations/cadvisor", instance="pi4", name!=""}[5m]) * 100)
+
+      # Per-container memory usage bytes (max by name — only one container per name is running)
+      - record: container:memory:usage_bytes
+        expr: |
+          max by (name) (container_memory_usage_bytes{job="integrations/cadvisor", instance="pi4", name!=""})
+
+      # Per-container memory limit bytes (only where limit is set)
+      - record: container:memory:limit_bytes
+        expr: |
+          max by (name) (container_spec_memory_limit_bytes{job="integrations/cadvisor", instance="pi4", name!=""} > 0)
+
+      # Per-container memory usage as percentage of limit (only where limit is set)
+      - record: container:memory:usage_percent
+        expr: |
+          max by (name) (container_memory_usage_bytes{job="integrations/cadvisor", instance="pi4", name!=""})
+          /
+          max by (name) (container_spec_memory_limit_bytes{job="integrations/cadvisor", instance="pi4", name!=""} > 0)
+          * 100
+
+      # Per-container network receive rate (sum by name to deduplicate)
+      - record: container:network:receive_bytes_rate
+        expr: |
+          sum by (name) (rate(container_network_receive_bytes_total{job="integrations/cadvisor", instance="pi4", name!=""}[5m]))
+
+      # Per-container network transmit rate (sum by name to deduplicate)
+      - record: container:network:transmit_bytes_rate
+        expr: |
+          sum by (name) (rate(container_network_transmit_bytes_total{job="integrations/cadvisor", instance="pi4", name!=""}[5m]))
+
+      # Per-container restart count (max by name to deduplicate)
+      - record: container:restarts:total
+        expr: |
+          max by (name) (increase(container_start_time_seconds{job="integrations/cadvisor", instance="pi4", name!=""}[1h]))
+
+  # --- Traefik reverse proxy metrics ---
+  - name: traefik_recording_rules
+    interval: 15s
+    rules:
+      # Total request rate across all services
+      - record: job:traefik_requests:rate5m
+        expr: |
+          sum(rate(traefik_service_requests_total{job="traefik"}[5m]))
+
+      # Request rate per status code
+      - record: job:traefik_requests:rate5m_by_code
+        expr: |
+          sum by (code) (rate(traefik_service_requests_total{job="traefik"}[5m]))
+
+      # Request rate per service
+      - record: job:traefik_requests:rate5m_by_service
+        expr: |
+          sum by (service) (rate(traefik_service_requests_total{job="traefik"}[5m]))
+
+      # 5xx error rate
+      - record: job:traefik_errors:rate5m
+        expr: |
+          sum(rate(traefik_service_requests_total{job="traefik", code=~"5.."}[5m]))
+
+      # Error ratio (5xx / total), guarded against division by zero
+      - record: job:traefik_error:ratio5m
+        expr: |
+          sum(rate(traefik_service_requests_total{job="traefik", code=~"5.."}[5m]))
+          /
+          (sum(rate(traefik_service_requests_total{job="traefik"}[5m])) > 0)
+
+      # P95 response time
+      - record: job:traefik_duration:p95_5m
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(traefik_service_request_duration_seconds_bucket{job="traefik"}[5m])))
+
+      # Open connections per entrypoint
+      - record: job:traefik_open_connections:sum
+        expr: |
+          sum by (entrypoint) (traefik_entrypoint_open_connections{job="traefik"})

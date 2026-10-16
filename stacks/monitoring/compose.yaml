@@ -1,0 +1,238 @@
+services:
+  docker-socket-proxy:
+    container_name: docker-socket-proxy
+    image: tecnativa/docker-socket-proxy
+    restart: unless-stopped
+    networks:
+      - grafana-monitoring
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Adds a long idle timeout for followed log streams (see README.md).
+      # The template itself is a modified copy of the image's file and is not
+      # republished here.
+      - ./docker-socket-proxy/haproxy.cfg.template:/usr/local/etc/haproxy/haproxy.cfg.template:ro
+    environment:
+      # Read-only API permissions
+      - CONTAINERS=1
+      - NETWORKS=1
+      - SERVICES=1
+      - TASKS=1
+      - EVENTS=1
+      - IMAGES=1
+      - INFO=1
+      - VERSION=1
+      - VOLUMES=1
+      # Explicitly deny write operations
+      - POST=0
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 64M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:2375/version || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+  loki:
+    container_name: loki
+    image: grafana/loki:3.6.7
+    networks:
+      - grafana-monitoring
+    volumes:
+      - ./loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki-data:/loki
+    restart: unless-stopped
+    command: -config.file=/etc/loki/loki-config.yml
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 384M
+    # NOTE: Loki 3.x uses a distroless image (no shell/wget/curl).
+    # Healthcheck disabled; Alloy handles retries natively.
+  alloy:
+    container_name: alloy
+    image: grafana/alloy:v1.14.0
+    privileged: true
+    pid: host
+    cgroup: host
+    networks:
+      - grafana-monitoring
+      - web
+    volumes:
+      - /var/log/journal:/var/log/journal:ro
+      - /run/log/journal:/run/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      # Scrape credentials (gitignored), e.g. the Home Assistant token.
+      - ./alloy/secrets:/etc/alloy/secrets:ro
+      - alloy-data:/var/lib/alloy/data
+      # Host filesystem mounts for prometheus.exporter.unix (node metrics)
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/rootfs:ro,rslave
+      # Host filesystem mounts for prometheus.exporter.cadvisor (container metrics)
+      - /var/run:/var/run:rw
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    restart: unless-stopped
+    command:
+      - run
+      - /etc/alloy/config.alloy
+      - --storage.path=/var/lib/alloy/data
+      - --server.http.listen-addr=0.0.0.0:12345
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          # 384M left only ~25M of headroom once cadvisor scraping settled in
+          # (measured 358M/384M, 93%) - the next scrape spike would OOM it.
+          memory: 512M
+    depends_on:
+      loki:
+        condition: service_started
+      docker-socket-proxy:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.alloy-rtr.entrypoints=https"
+      - "traefik.http.routers.alloy-rtr.rule=Host(`alloy.lucask.dev`)"
+      - "traefik.http.routers.alloy-rtr.middlewares=secured-auth@file"
+      - "traefik.http.routers.alloy-rtr.service=alloy-svc"
+      - "traefik.http.services.alloy-svc.loadbalancer.server.port=12345"
+  grafana:
+    container_name: grafana
+    image: grafana/grafana-oss:main-ubuntu
+    user: "472"
+    networks:
+      - grafana-monitoring
+      - web
+    volumes:
+      - ./grafana:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    environment:
+      - GF_SERVER_ROOT_URL=https://grafana.lucask.dev
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.grafana-rtr.entrypoints=https"
+      - "traefik.http.routers.grafana-rtr.rule=Host(`grafana.lucask.dev`)"
+      - "traefik.http.routers.grafana-rtr.service=grafana-svc"
+      - "traefik.http.services.grafana-svc.loadbalancer.server.port=3000"
+      - "traefik.http.routers.grafana-rtr.middlewares=secured@file"
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--storage.tsdb.retention.size=1GB'
+      - '--web.enable-lifecycle'
+      - '--web.enable-remote-write-receiver'
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules.yml:/etc/prometheus/rules.yml:ro
+      - ./prometheus/recording-rules.yml:/etc/prometheus/recording-rules.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - grafana-monitoring
+      - web
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.prometheus-rtr.entrypoints=https"
+      - "traefik.http.routers.prometheus-rtr.rule=Host(`prometheus.lucask.dev`)"
+      - "traefik.http.routers.prometheus-rtr.middlewares=secured-auth@file"
+      - "traefik.http.routers.prometheus-rtr.service=prometheus-svc"
+      - "traefik.http.services.prometheus-svc.loadbalancer.server.port=9090"
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: alertmanager
+    # Was missing: a Docker restart on 2026-06-12 left it exited, and nothing
+    # alerted for 3.5 months because the alerter itself was down.
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    networks:
+      - grafana-monitoring
+      - web
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      # Webhook URL for the Home Assistant receiver (gitignored).
+      - ./alertmanager/secrets:/etc/alertmanager/secrets:ro
+      - alertmanager-data:/alertmanager
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 64M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9093/-/healthy || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.alertmanager-rtr.entrypoints=https"
+      - "traefik.http.routers.alertmanager-rtr.rule=Host(`alertmanager.lucask.dev`)"
+      - "traefik.http.routers.alertmanager-rtr.middlewares=secured-auth@file"
+      - "traefik.http.routers.alertmanager-rtr.service=alertmanager-svc"
+      - "traefik.http.services.alertmanager-svc.loadbalancer.server.port=9093"
+
+networks:
+  grafana-monitoring:
+    name: grafana-monitoring
+  web:
+    external: true
+
+volumes:
+  loki-data:
+  prometheus-data:
+  alertmanager-data:
+  alloy-data:

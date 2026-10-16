@@ -1,0 +1,21 @@
+# Shape of conf.d/crowdsec_bouncer.yml, which is gitignored because it holds
+# the CrowdSec LAPI key. Copy to crowdsec_bouncer.yml and fill in the key
+# (docker exec crowdsec cscli bouncers add traefik-bouncer-plugin).
+# Traefik only loads *.yml / *.yaml / *.toml from conf.d, so this
+# .example file is ignored by the file provider.
+http:
+    middlewares:
+        crowdsec-bouncer:
+            plugin:
+                bouncer:
+                    enabled: true
+                    # Pull the decision list instead of asking LAPI per request.
+                    crowdsecMode: stream
+                    updateIntervalSeconds: 60
+                    crowdsecLapiHost: crowdsec:8080
+                    crowdsecLapiKey: "<lapi-key>"
+                    # Inline WAF inspection (crowdsec/config/acquis.d/appsec.yaml).
+                    crowdsecAppsecEnabled: true
+                    crowdsecAppsecHost: crowdsec:7422
+                    # Fail open: a CrowdSec restart must not 503 every service.
+                    crowdsecAppsecUnreachableBlock: false
