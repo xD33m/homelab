@@ -67,7 +67,7 @@ services:
     # Healthcheck disabled; Alloy handles retries natively.
   alloy:
     container_name: alloy
-    image: grafana/alloy:v1.14.0
+    image: grafana/alloy:v1.21.0
     privileged: true
     pid: host
     cgroup: host
