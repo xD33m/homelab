@@ -18,7 +18,7 @@ services:
     container_name: homeassistant
     # Pinned: HA ships breaking changes monthly. Bump deliberately after
     # reading "Backward-incompatible changes" in the release notes.
-    image: ghcr.io/home-assistant/home-assistant:2026.9.4
+    image: ghcr.io/home-assistant/home-assistant:2026.10.2
     restart: unless-stopped
     stop_grace_period: 60s        # lets the recorder close SQLite cleanly
     network_mode: host
